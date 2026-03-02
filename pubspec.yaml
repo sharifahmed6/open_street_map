@@ -40,6 +40,7 @@ dependencies:
   flutter_map_location_marker: ^10.2.0
   location: ^8.0.1
   flutter_polyline_points: ^3.1.0
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:

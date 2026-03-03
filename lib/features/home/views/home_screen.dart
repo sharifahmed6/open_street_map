@@ -1,13 +1,15 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_location_marker/flutter_map_location_marker.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
-import 'package:location/location.dart';
 
 import '../model/place_result.dart';
 
@@ -20,7 +22,6 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final MapController _mapController = MapController();
-  Location _location = Location();
   TextEditingController _locationController = TextEditingController();
   bool isLoading = true;
   LatLng? _currentLocation;
@@ -31,34 +32,61 @@ class _HomeScreenState extends State<HomeScreen> {
     // TODO: implement initState
     super.initState();
     _initialLocation();
-    pinMultiplePlaces(['Rampura, Dhaka', 'Mohakhali, Dhaka', 'Kurmitola, Dhaka','Khelket']);
+    pinMultiplePlaces(['Rampura, Dhaka', 'Mohakhali, Dhaka', 'Kurmitola, Dhaka','Khilkhet,Dhaka']);
   }
 
   // initialze Location
   Future<void> _initialLocation() async {
-    if (!await _checkLocationPermission()) return;
-    _location.onLocationChanged.listen((LocationData locationData) {
+    final ok = await _ensureGeoPermission();
+    if (!ok) {
+      if (mounted) setState(() => isLoading = false);
+      return;
+    }
+
+    final pos = await Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.high,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _currentLocation = LatLng(pos.latitude, pos.longitude);
+      isLoading = false;
+    });
+
+    Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 5,
+      ),
+    ).listen((p) {
+      if (!mounted) return;
       setState(() {
-        _currentLocation = LatLng(
-          locationData.latitude!,
-          locationData.longitude!,
-        );
-        isLoading = false;
+        _currentLocation = LatLng(p.latitude, p.longitude);
       });
     });
   }
 
-  Future<bool> _checkLocationPermission() async {
-    bool serviceEnabled = await _location.serviceEnabled();
+  Future<bool> _ensureGeoPermission() async {
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      serviceEnabled = await _location.requestService();
-      if (!serviceEnabled) return false;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Turn ON Location service')),
+        );
+      }
+      return false;
     }
-    PermissionStatus permissionGranted = await _location.hasPermission();
-    if (permissionGranted == PermissionStatus.denied) {
-      permissionGranted = await _location.requestPermission();
-      if (permissionGranted != PermissionStatus.granted) return false;
+
+    LocationPermission perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
     }
+
+    if (perm == LocationPermission.denied ||
+        perm == LocationPermission.deniedForever) {
+      return false;
+    }
+
     return true;
   }
 
@@ -207,21 +235,28 @@ void _decodePolyLine(String encodePolyline){
     final List data = jsonDecode(res.body);
     return data.map((e) => PlaceResult.fromJson(e)).toList();
   }
-
-  Future<void> updateSuggestions(String q) async {
-    if (q.trim().isEmpty) {
-      setState(() => _suggestions = []);
-      return;
-    }
-
-    setState(() => _isSearching = true);
-    final results = await searchTop5(q.trim());
-    if (!mounted) return;
-
-    setState(() {
-      _suggestions = results;
-      _isSearching = false;
+  Timer? _debounce;
+  void updateSuggestions(String q) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), () async {
+      if (q.trim().isEmpty) {
+        if (mounted) setState(() => _suggestions = []);
+        return;
+      }
+      if (mounted) setState(() => _isSearching = true);
+      final results = await searchTop5(q.trim());
+      if (!mounted) return;
+      setState(() {
+        _suggestions = results;
+        _isSearching = false;
+      });
     });
+  }
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _locationController.dispose();
+    super.dispose();
   }
   @override
   Widget build(BuildContext context) {
